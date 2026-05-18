@@ -430,22 +430,31 @@ with tabs[0]:
                 compat["antiguedad"],
             )
 
-        # VEVO + Licencia (con lógica encadenada)
-        col_vevo, col_lic = st.columns(2)
-        vevo_disponible = compat["vevo"]
-        with col_vevo:
-            is_vevo = st.checkbox(
-                "Canal VEVO oficial",
-                value=False,
-                disabled=not vevo_disponible,
-                help="VEVO requiere contrato activo con un sello." if not vevo_disponible
-                     else "Activarlo forzará el sello a 'Major'.",
-            )
-        with col_lic:
-            is_licensed = st.checkbox(
-                "Contenido licenciado",
-                value=True if vevo_disponible else False,
-            )
+        # Distribución comercial (reemplaza VEVO + licensed por un único selector)
+        distribucion = st.radio(
+            "¿Cómo se distribuye comercialmente la música del artista?",
+            [
+                "Distribución independiente (sin contrato con sello)",
+                "Sello con distribución registrada",
+                "Sello con canal VEVO oficial",
+            ],
+            index=1,
+            help=(
+                "Distribución independiente: el artista publica directamente sin sello formal.  •  "
+                "Sello con distribución registrada: hay un sello (indie, regional o major) "
+                "que reclama derechos del video en YouTube.  •  "
+                "Canal VEVO oficial: el canal del artista termina en 'VEVO', solo aplica a artistas "
+                "firmados con un major label (Universal, Sony, Warner)."
+            ),
+        )
+
+        # Mapeo a las variables booleanas que recibe el modelo
+        if distribucion == "Distribución independiente (sin contrato con sello)":
+            is_vevo, is_licensed = False, False
+        elif distribucion == "Sello con distribución registrada":
+            is_vevo, is_licensed = False, True
+        else:  # Sello con canal VEVO oficial
+            is_vevo, is_licensed = True, True
 
         # 4. POPULARIDAD LAST.FM
         st.markdown('<p class="section-label">Popularidad histórica en Last.fm</p>', unsafe_allow_html=True)
@@ -476,13 +485,26 @@ with tabs[0]:
         st.markdown('<p class="section-label">Perfil editorial</p>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            # Si VEVO está activo, forzar sello a Major
+            # El sello se condiciona por la opción de distribución elegida arriba
             if is_vevo:
+                # VEVO siempre implica Major
                 sello = "Major (Universal / Sony / Warner)"
-                st.selectbox("Sello discográfico", [sello], disabled=True,
-                             help="VEVO requiere sello Major.")
+                st.selectbox(
+                    "Sello discográfico", [sello], disabled=True,
+                    help="VEVO requiere sello Major.",
+                )
+            elif not is_licensed:
+                # Distribución independiente implica sin sello formal
+                sello = "Independiente"
+                st.selectbox(
+                    "Sello discográfico", [sello], disabled=True,
+                    help="La distribución independiente implica que no hay un sello con derechos registrados.",
+                )
             else:
-                sello = st.selectbox("Sello discográfico", compat["sello"])
+                # Sello con distribución registrada: puede ser indie, regional o major
+                opciones_sello = [s for s in compat["sello"]
+                                  if s != "Independiente" or "Independiente" in compat["sello"]]
+                sello = st.selectbox("Sello discográfico", opciones_sello)
         with c2:
             featuring_opt = st.radio(
                 "Colaboraciones",
@@ -727,10 +749,9 @@ with tabs[0]:
             <div class="result-card">
                 <p class="section-label" style="margin-top:0">Cómo funciona</p>
                 <ol style="color: #cbd5e1; line-height: 1.9; font-size: 0.9rem; padding-left: 1.2rem;">
-                    <li>Sube el archivo de audio (.wav o .mp3) — las características acústicas
-                        se extraen automáticamente con Librosa.</li>
-                    <li>Completa el perfil del artista. Los campos están encadenados por 
-                        trayectoria para evitar combinaciones inconsistentes.</li>
+                    <li>Completa el perfil del artista.</li>
+                    <li>Sube el archivo de audio (.wav o .mp3). Las características acústicas
+                        se extraen automáticamente.</li>
                     <li>Obtén el análisis: nivel proyectado, territorios con mejor recibimiento, 
                         y temporada óptima de lanzamiento.</li>
                 </ol>
