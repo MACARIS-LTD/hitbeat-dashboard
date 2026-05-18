@@ -162,29 +162,38 @@ ANTIGUEDAD_RANGOS = {
     "Más de 10 años":   14.0,
 }
 
-# Reglas de compatibilidad por trayectoria
+# Reglas de compatibilidad por trayectoria.
+# Rangos calibrados con los percentiles reales (P10–P90) del dataset de referencia.
+# Las categorías se solapan deliberadamente porque la trayectoria no es función
+# exclusiva de subs sino composite con antigüedad, sello y alcance internacional.
 COMPAT = {
-    "Artista nuevo": {
-        "subs":       ["Menos de 100 mil", "100 mil – 500 mil"],
+    "Emergente": {
+        # Sin masa crítica de audiencia. Mediana de subs ~195K, max real 1.8M.
+        # 38% de los Emergentes del dataset tiene VEVO, así que se permite.
+        "subs":       ["Menos de 100 mil", "100 mil – 500 mil", "500 mil – 2 millones"],
         "listeners":  ["Menos de 50 mil", "50 mil – 500 mil"],
-        "antiguedad": ["Menos de 2 años", "2 – 5 años"],
-        "sello":      ["Independiente", "Sello regional"],
-        "vevo":       False,
-        "max_territorios": 2,
-    },
-    "En crecimiento": {
-        "subs":       ["100 mil – 500 mil", "500 mil – 2 millones", "2 – 10 millones"],
-        "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
-        "antiguedad": ["2 – 5 años", "5 – 10 años"],
+        "antiguedad": ["Menos de 2 años", "2 – 5 años", "5 – 10 años", "Más de 10 años"],
         "sello":      ["Independiente", "Sello regional", "Major (Universal / Sony / Warner)"],
         "vevo":       True,
-        "max_territorios": 5,
+        "max_territorios": 4,
     },
-    "Artista consolidado": {
+    "Establecido": {
+        # Audiencia regional consolidada. Mediana de subs ~780K, max real 10.9M.
+        "subs":       ["100 mil – 500 mil", "500 mil – 2 millones", "2 – 10 millones"],
+        "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
+        "antiguedad": ["2 – 5 años", "5 – 10 años", "Más de 10 años"],
+        "sello":      ["Independiente", "Major (Universal / Sony / Warner)"],
+        "vevo":       True,
+        "max_territorios": 6,
+    },
+    "Consagrado": {
+        # Audiencia masiva internacional. Mediana de subs ~4.1M, max real 18.7M.
+        # Algunos consagrados tienen poca presencia en Last.fm por cobertura
+        # desigual, por eso se permite el rango 50K-500K de listeners.
         "subs":       ["500 mil – 2 millones", "2 – 10 millones", "Más de 10 millones"],
-        "listeners":  ["500 mil – 2 millones", "Más de 2 millones"],
+        "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
         "antiguedad": ["5 – 10 años", "Más de 10 años"],
-        "sello":      ["Sello regional", "Major (Universal / Sony / Warner)"],
+        "sello":      ["Independiente", "Major (Universal / Sony / Warner)"],
         "vevo":       True,
         "max_territorios": 7,
     },
@@ -391,13 +400,18 @@ with tabs[0]:
 
         # 2. TRAYECTORIA (CAMPO ANCLA)
         st.markdown('<p class="section-label">Trayectoria del artista</p>', unsafe_allow_html=True)
-        st.caption("Este campo condiciona los valores válidos del resto del formulario.")
+        st.caption("Define el nivel de fama del artista. Condiciona los rangos válidos del resto del formulario.")
         trayectoria = st.radio(
             "Trayectoria",
             list(COMPAT.keys()),
             index=1,
             horizontal=True,
             label_visibility="collapsed",
+            help=(
+                "Emergente: sin masa crítica de audiencia, suscriptores típicos por debajo de 500K.  •  "
+                "Establecido: audiencia regional consolidada, suscriptores típicos de 300K a 3M.  •  "
+                "Consagrado: audiencia masiva internacional, suscriptores típicos por encima de 1M."
+            ),
         )
         compat = COMPAT[trayectoria]
 
@@ -543,11 +557,8 @@ with tabs[0]:
             playcount_val = PLAYCOUNT_RANGOS[playcount_label]
             antig_val     = ANTIGUEDAD_RANGOS[antig_label]
 
-            career_map = {
-                "Artista nuevo": "Emergente",
-                "En crecimiento": "Establecido",
-                "Artista consolidado": "Consagrado",
-            }
+            # Las etiquetas de trayectoria ya coinciden con las del modelo
+            # (Emergente / Establecido / Consagrado), no se requiere mapeo.
             sello_map = {
                 "Independiente": "Indie",
                 "Sello regional": "Regional",
@@ -572,7 +583,7 @@ with tabs[0]:
                 "territorio_top_1":            territorio_1,
                 "territorio_top_2":            territorio_2,
                 "n_territorios_top":           len(territorios_seleccionados),
-                "career_stage":                career_map[trayectoria],
+                "career_stage":                trayectoria,
                 "label_type":                  sello_map[sello],
                 "has_featuring":               int(has_featuring),
                 "n_collaborators":             n_collabs,
