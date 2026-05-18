@@ -5,30 +5,102 @@ import plotly.express as px
 import pickle
 import os
 
+# ══════════════════════════════════════════════════════════════
+# CONFIGURACIÓN
+# ══════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="HitBeat — Predictor de Alcance Musical",
-    page_icon="🎵", layout="wide",
-    initial_sidebar_state="expanded",
+    page_title="HitBeat — Predicción de Alcance Musical",
+    page_icon="🎵",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
+# ── Estilo: editorial, profesional, sin saturación ──────────
 st.markdown("""
 <style>
-    .main-title {
-        font-size: 2.8rem; font-weight: 800;
-        background: linear-gradient(90deg, #1DB954, #F5C842, #A855F7, #38BDF8);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    .block-container { padding-top: 2rem; max-width: 1200px; }
+    h1, h2, h3 { font-weight: 500 !important; letter-spacing: -0.01em; }
+    .brand {
+        font-family: 'Georgia', serif;
+        font-size: 2.4rem; font-weight: 400;
+        letter-spacing: -0.02em; color: #e2e8f0;
+        margin-bottom: 0.2rem;
     }
-    .subtitle { color: #94a3b8; font-size: 1rem; }
+    .brand-sub {
+        color: #94a3b8; font-size: 0.95rem;
+        letter-spacing: 0.02em; font-weight: 300;
+    }
+    .section-label {
+        font-size: 0.72rem; font-weight: 600;
+        letter-spacing: 0.12em; text-transform: uppercase;
+        color: #64748b; margin: 1.4rem 0 0.6rem;
+    }
+    .helper {
+        color: #64748b; font-size: 0.8rem;
+        font-style: italic; margin-top: 4px;
+    }
+    .result-card {
+        background: #0f172a;
+        border: 1px solid #1e293b;
+        border-radius: 14px;
+        padding: 1.5rem; margin-bottom: 1rem;
+    }
+    .level-pill {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 22px; border-radius: 99px;
+        font-size: 1.3rem; font-weight: 500;
+        letter-spacing: 0.02em;
+    }
+    .warning-box {
+        background: rgba(245, 158, 11, 0.08);
+        border-left: 3px solid #f59e0b;
+        padding: 10px 14px; border-radius: 4px;
+        font-size: 0.85rem; color: #fbbf24; margin: 8px 0;
+    }
+    .error-box {
+        background: rgba(239, 68, 68, 0.08);
+        border-left: 3px solid #ef4444;
+        padding: 10px 14px; border-radius: 4px;
+        font-size: 0.85rem; color: #f87171; margin: 8px 0;
+    }
+    .region-row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px;
+        background: #1e293b;
+        border-radius: 8px; margin-bottom: 6px;
+    }
+    .month-cell {
+        text-align: center; padding: 8px 4px;
+        border-radius: 6px; font-size: 0.78rem;
+        font-weight: 500;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px; border-bottom: 1px solid #1e293b;
+    }
     .stTabs [data-baseweb="tab"] {
-        background: #1e293b; border-radius: 8px;
-        padding: 8px 20px; color: #94a3b8;
+        background: transparent !important;
+        border-radius: 0 !important;
+        color: #64748b !important;
+        padding: 12px 18px;
+        font-size: 0.9rem; font-weight: 400;
     }
     .stTabs [aria-selected="true"] {
-        background: #3b82f6 !important; color: white !important;
+        background: transparent !important;
+        color: #e2e8f0 !important;
+        border-bottom: 2px solid #38bdf8 !important;
+        font-weight: 500 !important;
+    }
+    div[data-testid="stExpander"] {
+        background: #0f172a; border: 1px solid #1e293b;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
 
+
+# ══════════════════════════════════════════════════════════════
+# CARGA DE DATOS Y MODELO
+# ══════════════════════════════════════════════════════════════
 @st.cache_data
 def cargar_datos():
     ruta = os.path.join(os.path.dirname(__file__), "data", "hitbeat_dashboard_data.csv")
@@ -43,6 +115,10 @@ def cargar_modelo():
 df     = cargar_datos()
 modelo = cargar_modelo()
 
+
+# ══════════════════════════════════════════════════════════════
+# CONSTANTES Y REGLAS DE CONSISTENCIA
+# ══════════════════════════════════════════════════════════════
 FEATURES = [
     "yt_channel_subscribers_log", "channel_age_years",
     "is_vevo", "is_licensed_content",
@@ -59,17 +135,103 @@ FEATURES = [
     "mfcc_1", "mfcc_2", "mfcc_3", "mfcc_4", "mfcc_5",
 ]
 
-NIVEL_COLORS = {"Alto": "#ef4444", "Medio": "#f59e0b", "Bajo": "#22c55e"}
-NIVEL_EMOJIS = {"Alto": "🔴", "Medio": "🟡", "Bajo": "🟢"}
-PAISES = ["MX","US","CO","ES","AR","CL","PE","VE","EC","DO","PR","GT","UY","PA","CR","BO"]
+# Rangos en valores numéricos representativos del rango
+SUBS_RANGOS = {
+    "Menos de 100 mil":      50_000,
+    "100 mil – 500 mil":     250_000,
+    "500 mil – 2 millones":  1_000_000,
+    "2 – 10 millones":       5_000_000,
+    "Más de 10 millones":    15_000_000,
+}
+LISTENERS_RANGOS = {
+    "Menos de 50 mil":           25_000,
+    "50 mil – 500 mil":          200_000,
+    "500 mil – 2 millones":      1_000_000,
+    "Más de 2 millones":         3_500_000,
+}
+PLAYCOUNT_RANGOS = {
+    "Menos de 1 millón":         500_000,
+    "1 – 10 millones":           5_000_000,
+    "10 – 100 millones":         50_000_000,
+    "Más de 100 millones":       300_000_000,
+}
+ANTIGUEDAD_RANGOS = {
+    "Menos de 2 años":  1.5,
+    "2 – 5 años":       3.5,
+    "5 – 10 años":      7.5,
+    "Más de 10 años":   14.0,
+}
 
+# Reglas de compatibilidad por trayectoria
+COMPAT = {
+    "Artista nuevo": {
+        "subs":       ["Menos de 100 mil", "100 mil – 500 mil"],
+        "listeners":  ["Menos de 50 mil", "50 mil – 500 mil"],
+        "antiguedad": ["Menos de 2 años", "2 – 5 años"],
+        "sello":      ["Independiente", "Sello regional"],
+        "vevo":       False,
+        "max_territorios": 2,
+    },
+    "En crecimiento": {
+        "subs":       ["100 mil – 500 mil", "500 mil – 2 millones", "2 – 10 millones"],
+        "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
+        "antiguedad": ["2 – 5 años", "5 – 10 años"],
+        "sello":      ["Independiente", "Sello regional", "Major (Universal / Sony / Warner)"],
+        "vevo":       True,
+        "max_territorios": 5,
+    },
+    "Artista consolidado": {
+        "subs":       ["500 mil – 2 millones", "2 – 10 millones", "Más de 10 millones"],
+        "listeners":  ["500 mil – 2 millones", "Más de 2 millones"],
+        "antiguedad": ["5 – 10 años", "Más de 10 años"],
+        "sello":      ["Sello regional", "Major (Universal / Sony / Warner)"],
+        "vevo":       True,
+        "max_territorios": 7,
+    },
+}
+
+# Pool de países hispanos
+PAISES_DISPLAY = {
+    "MX": "México",          "US": "Estados Unidos",  "CO": "Colombia",
+    "ES": "España",          "AR": "Argentina",       "CL": "Chile",
+    "PE": "Perú",            "VE": "Venezuela",       "EC": "Ecuador",
+    "DO": "República Dominicana", "PR": "Puerto Rico",
+    "GT": "Guatemala",       "UY": "Uruguay",         "PA": "Panamá",
+    "CR": "Costa Rica",      "BO": "Bolivia",
+}
+PAISES_FLAGS = {
+    "MX": "🇲🇽","US": "🇺🇸","CO": "🇨🇴","ES": "🇪🇸","AR": "🇦🇷","CL": "🇨🇱",
+    "PE": "🇵🇪","VE": "🇻🇪","EC": "🇪🇨","DO": "🇩🇴","PR": "🇵🇷","GT": "🇬🇹",
+    "UY": "🇺🇾","PA": "🇵🇦","CR": "🇨🇷","BO": "🇧🇴",
+}
+
+NIVEL_COLORS = {"Alto": "#ef4444", "Medio": "#f59e0b", "Bajo": "#22c55e"}
+NIVEL_BG     = {"Alto": "rgba(239,68,68,0.12)",
+                "Medio": "rgba(245,158,11,0.12)",
+                "Bajo":  "rgba(34,197,94,0.12)"}
+NIVEL_DESC   = {
+    "Alto":  "Más de 100 millones de vistas en YouTube",
+    "Medio": "Entre 5 y 100 millones de vistas",
+    "Bajo":  "Menos de 5 millones de vistas",
+}
+
+
+# ══════════════════════════════════════════════════════════════
+# EXTRACCIÓN DE FEATURES DE AUDIO
+# ══════════════════════════════════════════════════════════════
 def extraer_features_audio(wav_bytes):
+    """Extrae 16 features acústicas con Librosa. Aproxima las 2 de Essentia."""
     try:
-        import librosa, io
+        import librosa
+        import io
+
         y, sr = librosa.load(io.BytesIO(wav_bytes), sr=22050, mono=True)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         tempo = float(tempo)
-        if tempo > 140: tempo /= 2
+        if tempo > 140:
+            tempo = tempo / 2
+
         rms      = librosa.feature.rms(y=y)[0]
         centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
         bw       = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
@@ -77,23 +239,30 @@ def extraer_features_audio(wav_bytes):
         zcr      = librosa.feature.zero_crossing_rate(y=y)[0]
         mfccs    = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13).mean(axis=1)
         duracion = float(librosa.get_duration(y=y, sr=sr))
+
+        # Aproximaciones de Essentia
         y_harm, y_perc = librosa.effects.hpss(y)
         perc_ratio = float(np.mean(np.abs(y_perc)) / (np.mean(np.abs(y_harm)) + 1e-6))
-        beat_frames = librosa.beat.beat_track(y=y, sr=sr)[1]
-        beat_stab   = (1 / (1 + np.std(np.diff(beat_frames)) / (np.mean(np.diff(beat_frames)) + 1e-6))
-                       if len(beat_frames) > 2 else 0.5)
+        if len(beat_frames) > 2:
+            diffs = np.diff(beat_frames)
+            beat_stab = 1 / (1 + np.std(diffs) / (np.mean(diffs) + 1e-6))
+        else:
+            beat_stab = 0.5
         bailabilidad = float(np.clip(perc_ratio * beat_stab * 2.5, 0.70, 1.60))
+
         rms_db   = librosa.amplitude_to_db(rms)
         comp_din = float(np.clip(np.percentile(rms_db, 5) - np.percentile(rms_db, 95), -28, -10))
+
         return {
-            "duracion_total_s": round(duracion, 2), "tempo_bpm": round(tempo, 1),
-            "energia_rms_mean": round(float(np.mean(rms)), 4),
-            "energia_rms_std":  round(float(np.std(rms)), 4),
-            "brillo_centroide_mean": round(float(np.mean(centroid)), 2),
-            "brillo_centroide_std":  round(float(np.std(centroid)), 2),
-            "ancho_banda_hz":        round(float(np.mean(bw)), 2),
-            "caida_espectral_rolloff": round(float(np.mean(rolloff)), 2),
-            "tasa_cruces_cero":      round(float(np.mean(zcr)), 4),
+            "duracion_total_s":              round(duracion, 2),
+            "tempo_bpm":                     round(tempo, 1),
+            "energia_rms_mean":              round(float(np.mean(rms)), 4),
+            "energia_rms_std":               round(float(np.std(rms)), 4),
+            "brillo_centroide_mean":         round(float(np.mean(centroid)), 2),
+            "brillo_centroide_std":          round(float(np.std(centroid)), 2),
+            "ancho_banda_hz":                round(float(np.mean(bw)), 2),
+            "caida_espectral_rolloff":       round(float(np.mean(rolloff)), 2),
+            "tasa_cruces_cero":              round(float(np.mean(zcr)), 4),
             "bailabilidad_essentia":         round(bailabilidad, 4),
             "complejidad_dinamica_essentia": round(comp_din, 4),
             "mfcc_1": round(float(mfccs[0]), 4), "mfcc_2": round(float(mfccs[1]), 4),
@@ -103,30 +272,105 @@ def extraer_features_audio(wav_bytes):
     except Exception as e:
         return None, str(e)
 
-# ── Header ────────────────────────────────────────────────────
-st.markdown('<p class="main-title">🎵 HitBeat</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Predicción de alcance musical en YouTube · Música latina en español · IPN ESCOM</p>', unsafe_allow_html=True)
-st.divider()
 
-tabs = st.tabs(["🎯 Predecir canción nueva", "📊 Explorar mercado", "🏆 Feature importance", "📚 Metodología"])
+# ══════════════════════════════════════════════════════════════
+# FUNCIONES DE ANÁLISIS DE OUTPUT
+# ══════════════════════════════════════════════════════════════
+def territorios_recomendados(nivel, paises_artista):
+    """
+    Estima los 3-4 territorios donde una canción de este nivel suele tener
+    mejor recibimiento. Basado en frecuencias del dataset filtrando por nivel.
+    """
+    sub = df[df["nivel"] == nivel]
+    freq = pd.concat([
+        sub["territorio_top_1"].value_counts(),
+        sub[sub["territorio_top_2"] != "SIN_SEGUNDO"]["territorio_top_2"].value_counts(),
+    ], axis=1).fillna(0).sum(axis=1)
+    freq = freq.sort_values(ascending=False).head(4)
+    total = freq.sum()
+    
+    resultado = []
+    for pais, count in freq.items():
+        if pais == "SIN_SEGUNDO": continue
+        afinidad = "Alta" if count / total > 0.20 else "Media"
+        es_actual = pais in paises_artista
+        resultado.append({
+            "pais": pais,
+            "nombre": PAISES_DISPLAY.get(pais, pais),
+            "flag":   PAISES_FLAGS.get(pais, ""),
+            "afinidad": afinidad,
+            "actual": es_actual,
+        })
+    return resultado[:4]
 
-# ══════════ TAB 1: PREDICTOR ══════════
+
+def temporada_optima(nivel):
+    """Calcula el mes/temporada óptima basado en patrones del dataset."""
+    sub = df[df["nivel"] == nivel]
+    counts = sub["release_month"].value_counts().sort_index()
+    # Top 4 meses
+    top = counts.nlargest(4).index.tolist()
+    pct = round(counts.loc[top].sum() / counts.sum() * 100)
+    
+    meses = ["Ene","Feb","Mar","Abr","May","Jun",
+             "Jul","Ago","Sep","Oct","Nov","Dic"]
+    estaciones = {
+        (12,1,2): "el invierno",
+        (3,4,5):  "la primavera",
+        (6,7,8):  "el verano",
+        (9,10,11):"el otoño",
+    }
+    
+    estacion_dominante = None
+    for rango, nombre in estaciones.items():
+        if sum(m in rango for m in top) >= 3:
+            estacion_dominante = nombre
+            break
+    
+    return {
+        "top_meses": top,
+        "top_nombres": [meses[m-1] for m in top],
+        "pct": pct,
+        "estacion": estacion_dominante,
+    }
+
+
+# ══════════════════════════════════════════════════════════════
+# HEADER
+# ══════════════════════════════════════════════════════════════
+st.markdown("""
+<div style="margin-bottom: 2rem;">
+    <div class="brand">HitBeat</div>
+    <div class="brand-sub">Predicción de alcance musical para música latina en español</div>
+</div>
+""", unsafe_allow_html=True)
+
+
+tabs = st.tabs(["Análisis de canción", "Explorar mercado", "Importancia de variables", "Metodología"])
+
+
+# ══════════════════════════════════════════════════════════════
+# TAB 1 — PREDICTOR
+# ══════════════════════════════════════════════════════════════
 with tabs[0]:
-    st.markdown("### Predicción de alcance para una canción nueva")
-    st.caption("Sube el archivo de audio y completa el perfil del artista. El modelo estima el alcance antes del lanzamiento.")
+    st.markdown("##### Análisis de alcance esperado para una nueva canción")
+    st.caption("Sube el audio y completa el perfil del artista. El modelo proyecta el nivel de alcance, los territorios con mejor recibimiento esperado, y el momento óptimo de lanzamiento.")
 
-    col_form, col_result = st.columns([1, 1], gap="large")
+    col_form, col_result = st.columns([1.05, 1], gap="large")
 
+    # ── FORMULARIO ────────────────────────────────────────────
     with col_form:
-        st.markdown("#### 🎵 Archivo de audio")
+
+        # 1. AUDIO
+        st.markdown('<p class="section-label">Audio de la canción</p>', unsafe_allow_html=True)
         wav_file = st.file_uploader(
-            "Sube el archivo de la canción (.wav o .mp3)",
+            "Archivo de audio (.wav o .mp3)",
             type=["wav", "mp3"],
-            help="Se extraen automáticamente las 16 características acústicas con Librosa."
+            help="Las 16 características acústicas se extraen automáticamente con Librosa.",
+            label_visibility="collapsed",
         )
 
         audio_features, audio_ok = {}, False
-
         if wav_file is not None:
             with st.spinner("Analizando audio..."):
                 feats, err = extraer_features_audio(wav_file.read())
@@ -134,90 +378,204 @@ with tabs[0]:
                 st.error(f"Error al procesar el audio: {err}")
             else:
                 audio_features, audio_ok = feats, True
-                st.success("✅ Audio analizado correctamente")
-                with st.expander("Ver características acústicas extraídas"):
-                    c_a1, c_a2 = st.columns(2)
-                    labels = [
-                        ("Duración", f"{feats['duracion_total_s']:.1f} s"),
-                        ("Tempo", f"{feats['tempo_bpm']:.1f} BPM"),
-                        ("Energía RMS", f"{feats['energia_rms_mean']:.4f}"),
-                        ("Brillo espectral", f"{feats['brillo_centroide_mean']:.0f} Hz"),
-                        ("Bailabilidad", f"{feats['bailabilidad_essentia']:.3f}"),
-                        ("Complejidad dinámica", f"{feats['complejidad_dinamica_essentia']:.2f} dB"),
-                        ("Ancho de banda", f"{feats['ancho_banda_hz']:.0f} Hz"),
-                        ("Spectral rolloff", f"{feats['caida_espectral_rolloff']:.0f} Hz"),
-                        ("Zero crossing rate", f"{feats['tasa_cruces_cero']:.4f}"),
-                        ("MFCC 1-5", f"{feats['mfcc_1']:.1f} / {feats['mfcc_2']:.1f} / {feats['mfcc_3']:.1f} / {feats['mfcc_4']:.1f} / {feats['mfcc_5']:.1f}"),
-                    ]
-                    for i, (label, val) in enumerate(labels):
-                        (c_a1 if i < 5 else c_a2).metric(label, val)
-        else:
-            st.info("👆 Sube un archivo .wav o .mp3 para extraer automáticamente las características de audio.")
+                with st.expander("Características acústicas extraídas", expanded=False):
+                    c1, c2 = st.columns(2)
+                    c1.metric("Duración",     f"{feats['duracion_total_s']:.0f} s")
+                    c1.metric("Tempo",        f"{feats['tempo_bpm']:.0f} BPM")
+                    c1.metric("Energía RMS",  f"{feats['energia_rms_mean']:.3f}")
+                    c1.metric("Bailabilidad", f"{feats['bailabilidad_essentia']:.2f}")
+                    c2.metric("Brillo espectral",     f"{feats['brillo_centroide_mean']:.0f} Hz")
+                    c2.metric("Ancho de banda",       f"{feats['ancho_banda_hz']:.0f} Hz")
+                    c2.metric("Spectral rolloff",     f"{feats['caida_espectral_rolloff']:.0f} Hz")
+                    c2.metric("Complejidad dinámica", f"{feats['complejidad_dinamica_essentia']:.1f} dB")
 
-        st.divider()
-        st.markdown("#### 📡 Contexto del artista")
+        # 2. TRAYECTORIA (CAMPO ANCLA)
+        st.markdown('<p class="section-label">Trayectoria del artista</p>', unsafe_allow_html=True)
+        st.caption("Este campo condiciona los valores válidos del resto del formulario.")
+        trayectoria = st.radio(
+            "Trayectoria",
+            list(COMPAT.keys()),
+            index=1,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        compat = COMPAT[trayectoria]
+
+        # 3. CANAL DE YOUTUBE
+        st.markdown('<p class="section-label">Canal del artista en YouTube</p>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            subs_millones    = st.number_input("Suscriptores YT (millones)", 0.01, 20.0, 1.0, 0.1)
-            channel_age      = st.number_input("Antigüedad del canal (años)", 0.5, 20.0, 5.0, 0.5)
-            is_vevo          = st.toggle("Canal VEVO", value=False)
-            is_licensed      = st.toggle("Contenido licenciado", value=True)
+            subs_label = st.selectbox(
+                "Suscriptores del canal",
+                compat["subs"],
+                help="Consultar directamente en el canal de YouTube del artista.",
+            )
         with c2:
-            lastfm_listeners = st.number_input("Last.fm listeners (miles)", 1, 5000, 200) * 1000
-            lastfm_playcount = st.number_input("Last.fm playcount (miles)", 1, 50000, 2000) * 1000
-            top_tag_score    = st.slider("Pureza de género (Last.fm)", 10, 100, 65)
-            similar_match    = st.slider("Cohesión de clúster de similares", 0.20, 0.95, 0.55)
+            antig_label = st.selectbox(
+                "Antigüedad del canal",
+                compat["antiguedad"],
+            )
 
-        st.markdown("#### 🌍 Alcance territorial del artista")
-        c3, c4 = st.columns(2)
-        with c3:
-            n_territorios = st.slider("Nº territorios con tracción", 1, 7, 2)
-            territorio_1  = st.selectbox("Territorio principal", PAISES, index=0)
-        with c4:
-            if n_territorios >= 2:
-                territorio_2 = st.selectbox("Segundo territorio", [p for p in PAISES if p != territorio_1], index=1)
+        # VEVO + Licencia (con lógica encadenada)
+        col_vevo, col_lic = st.columns(2)
+        vevo_disponible = compat["vevo"]
+        with col_vevo:
+            is_vevo = st.checkbox(
+                "Canal VEVO oficial",
+                value=False,
+                disabled=not vevo_disponible,
+                help="VEVO requiere contrato activo con un sello." if not vevo_disponible
+                     else "Activarlo forzará el sello a 'Major'.",
+            )
+        with col_lic:
+            is_licensed = st.checkbox(
+                "Contenido licenciado",
+                value=True if vevo_disponible else False,
+            )
+
+        # 4. POPULARIDAD LAST.FM
+        st.markdown('<p class="section-label">Popularidad histórica en Last.fm</p>', unsafe_allow_html=True)
+        st.caption("Consultar en last.fm/music/{nombre del artista}")
+        c1, c2 = st.columns(2)
+        with c1:
+            listeners_label = st.selectbox(
+                "Oyentes únicos",
+                compat["listeners"],
+                help="Personas distintas que escuchan al artista en Last.fm.",
+            )
+        with c2:
+            # Filtrar playcount válido según listeners
+            listeners_val = LISTENERS_RANGOS[listeners_label]
+            playcount_validos = [
+                k for k, v in PLAYCOUNT_RANGOS.items()
+                if v >= listeners_val * 4
+            ]
+            if not playcount_validos:
+                playcount_validos = list(PLAYCOUNT_RANGOS.keys())[-2:]
+            playcount_label = st.selectbox(
+                "Reproducciones totales",
+                playcount_validos,
+                help="Historial acumulado del artista. Debe ser mayor que los oyentes únicos.",
+            )
+
+        # 5. PERFIL EDITORIAL
+        st.markdown('<p class="section-label">Perfil editorial</p>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            # Si VEVO está activo, forzar sello a Major
+            if is_vevo:
+                sello = "Major (Universal / Sony / Warner)"
+                st.selectbox("Sello discográfico", [sello], disabled=True,
+                             help="VEVO requiere sello Major.")
             else:
-                territorio_2 = "SIN_SEGUNDO"
-                st.info("Con 1 territorio, top_2 = SIN_SEGUNDO")
+                sello = st.selectbox("Sello discográfico", compat["sello"])
+        with c2:
+            featuring_opt = st.radio(
+                "Colaboraciones",
+                ["Sin featuring", "1 colaborador", "2 o más"],
+                horizontal=True,
+            )
+        has_featuring = featuring_opt != "Sin featuring"
+        n_collabs = {"Sin featuring": 0, "1 colaborador": 1, "2 o más": 2}[featuring_opt]
 
-        st.markdown("#### 🏷️ Contexto editorial")
-        c5, c6 = st.columns(2)
-        with c5:
-            career_stage  = st.selectbox("Etapa de carrera", ["Emergente", "Establecido", "Consagrado"])
-            label_type    = st.selectbox("Tipo de sello", ["Indie", "Major", "Regional"])
-            release_month = st.selectbox("Mes de lanzamiento", list(range(1,13)),
-                                          format_func=lambda m: ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][m-1])
-        with c6:
-            has_featuring = st.toggle("¿Tiene featuring?", value=False)
-            n_collabs     = st.number_input("Nº de colaboradores", 0, 3, 0) if has_featuring else 0
+        # 6. MES DE LANZAMIENTO
+        st.markdown('<p class="section-label">Mes de lanzamiento planeado</p>', unsafe_allow_html=True)
+        meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+        release_idx = st.select_slider(
+            "Mes",
+            options=list(range(12)),
+            value=4,
+            format_func=lambda i: meses[i],
+            label_visibility="collapsed",
+        )
+        release_month = release_idx + 1
 
-        st.divider()
+        # 7. PRESENCIA TERRITORIAL
+        st.markdown('<p class="section-label">Presencia territorial actual del artista</p>', unsafe_allow_html=True)
+        st.caption(f"¿En qué países el artista ya tiene base de fans? Máximo {compat['max_territorios']} para un artista {trayectoria.lower()}.")
+
+        paises_principales = ["MX", "US", "CO", "ES", "AR", "CL", "PE", "Otro"]
+        cols_paises = st.columns(4)
+        territorios_seleccionados = []
+        for i, pais in enumerate(paises_principales):
+            col = cols_paises[i % 4]
+            label = PAISES_DISPLAY.get(pais, "Otro país")
+            seleccionado = col.checkbox(label, value=(pais in ["MX", "US"]), key=f"pais_{pais}")
+            if seleccionado:
+                territorios_seleccionados.append(pais)
+
+        # Validación de cantidad de territorios
+        if len(territorios_seleccionados) > compat["max_territorios"]:
+            st.markdown(f"""
+            <div class="warning-box">
+                Para un artista {trayectoria.lower()} es poco frecuente tener presencia en más de 
+                {compat["max_territorios"]} territorios. El modelo lo procesará de todas formas, 
+                pero considera revisar la selección.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 8. VALIDACIONES Y BOTÓN
+        st.markdown("---")
+        
+        errores = []
         if not audio_ok:
-            st.warning("⚠️ Sube un archivo de audio para habilitar el análisis.")
-        predecir = st.button("🔮 ANALIZAR CANCIÓN", use_container_width=True,
-                              type="primary", disabled=not audio_ok)
+            errores.append("Sube un archivo de audio para habilitar el análisis.")
+        if len(territorios_seleccionados) == 0:
+            errores.append("Selecciona al menos un territorio donde el artista tenga presencia.")
 
+        for err in errores:
+            st.markdown(f'<div class="error-box">{err}</div>', unsafe_allow_html=True)
+
+        predecir = st.button(
+            "Analizar canción",
+            use_container_width=True,
+            type="primary",
+            disabled=len(errores) > 0,
+        )
+
+    # ── RESULTADO ─────────────────────────────────────────────
     with col_result:
-        st.markdown("#### 📈 Resultado de la predicción")
-        if predecir and audio_ok:
+        if predecir and audio_ok and len(territorios_seleccionados) > 0:
+
+            # Mapeo de categorías visuales a valores del modelo
+            subs_val      = SUBS_RANGOS[subs_label]
+            listeners_val = LISTENERS_RANGOS[listeners_label]
+            playcount_val = PLAYCOUNT_RANGOS[playcount_label]
+            antig_val     = ANTIGUEDAD_RANGOS[antig_label]
+
+            career_map = {
+                "Artista nuevo": "Emergente",
+                "En crecimiento": "Establecido",
+                "Artista consolidado": "Consagrado",
+            }
+            sello_map = {
+                "Independiente": "Indie",
+                "Sello regional": "Regional",
+                "Major (Universal / Sony / Warner)": "Major",
+            }
+
+            territorio_1 = territorios_seleccionados[0] if territorios_seleccionados else "MX"
+            territorio_2 = (territorios_seleccionados[1]
+                            if len(territorios_seleccionados) >= 2 else "SIN_SEGUNDO")
+
             input_data = pd.DataFrame([{
-                "yt_channel_subscribers_log":  float(np.log10(subs_millones * 1e6)),
-                "channel_age_years":           channel_age,
+                "yt_channel_subscribers_log":  float(np.log10(subs_val)),
+                "channel_age_years":           antig_val,
                 "is_vevo":                     int(is_vevo),
                 "is_licensed_content":         int(is_licensed),
-                "lastfm_artist_listeners":     lastfm_listeners,
-                "lastfm_artist_playcount":     lastfm_playcount,
-                "lastfm_plays_per_listener":   round(lastfm_playcount / lastfm_listeners, 2),
-                "lastfm_top_tag_score":        top_tag_score,
-                "lastfm_top10_listeners_mean": int(lastfm_listeners * 0.35),
-                "lastfm_similar_match_mean":   similar_match,
+                "lastfm_artist_listeners":     listeners_val,
+                "lastfm_artist_playcount":     playcount_val,
+                "lastfm_plays_per_listener":   round(playcount_val / listeners_val, 2),
+                "lastfm_top_tag_score":        65,  # valor medio típico
+                "lastfm_top10_listeners_mean": int(listeners_val * 0.35),
+                "lastfm_similar_match_mean":   0.55,  # valor medio típico
                 "territorio_top_1":            territorio_1,
                 "territorio_top_2":            territorio_2,
-                "n_territorios_top":           n_territorios,
-                "career_stage":                career_stage,
-                "label_type":                  label_type,
+                "n_territorios_top":           len(territorios_seleccionados),
+                "career_stage":                career_map[trayectoria],
+                "label_type":                  sello_map[sello],
                 "has_featuring":               int(has_featuring),
-                "n_collaborators":             int(n_collabs),
+                "n_collaborators":             n_collabs,
                 "release_month":               release_month,
                 **audio_features,
             }])
@@ -226,55 +584,172 @@ with tabs[0]:
             proba      = modelo.predict_proba(input_data)[0]
             clases     = list(modelo.classes_)
             prob_dict  = {c: p for c, p in zip(clases, proba)}
-            color      = NIVEL_COLORS[nivel_pred]
-            emoji      = NIVEL_EMOJIS[nivel_pred]
 
+            color  = NIVEL_COLORS[nivel_pred]
+            bg     = NIVEL_BG[nivel_pred]
+
+            # PREDICCIÓN PRINCIPAL
             st.markdown(f"""
-            <div style="background:#1e293b; border:2px solid {color};
-                        border-radius:16px; padding:2rem; text-align:center; margin-bottom:1.5rem;">
-                <div style="font-size:3.5rem">{emoji}</div>
-                <div style="font-size:2.8rem; font-weight:800; color:{color}; margin:0.3rem 0">{nivel_pred.upper()}</div>
-                <div style="color:#94a3b8; font-size:1rem">Nivel de alcance proyectado</div>
-                <div style="color:#64748b; font-size:0.85rem; margin-top:0.4rem">
-                    {"< 5 millones de vistas" if nivel_pred=="Bajo" else "Entre 5M y 100M vistas" if nivel_pred=="Medio" else "Más de 100 millones de vistas"}
+            <div class="result-card" style="text-align: center;">
+                <p style="font-size: 0.72rem; color: #64748b; letter-spacing: 0.12em;
+                          text-transform: uppercase; margin-bottom: 12px;">
+                    Nivel de alcance proyectado
+                </p>
+                <div class="level-pill" style="background: {bg}; color: {color};
+                                                border: 1px solid {color}33;">
+                    {nivel_pred}
                 </div>
+                <p style="color: #94a3b8; font-size: 0.9rem; margin-top: 14px;">
+                    {NIVEL_DESC[nivel_pred]}
+                </p>
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("##### Distribución de probabilidades")
-            for nv in ["Alto", "Medio", "Bajo"]:
-                p = prob_dict.get(nv, 0)
-                col_n, col_b = st.columns([2, 5])
-                col_n.markdown(f"{NIVEL_EMOJIS[nv]} **{nv}**")
-                col_b.progress(float(p), text=f"{p*100:.1f}%")
+            # PROBABILIDADES
+            with st.container(border=False):
+                st.markdown('<p class="section-label" style="margin-top:0">Distribución de probabilidad</p>',
+                             unsafe_allow_html=True)
+                for nv in ["Alto", "Medio", "Bajo"]:
+                    p = prob_dict.get(nv, 0)
+                    es_top = (nv == nivel_pred)
+                    col_n, col_b = st.columns([1.5, 5])
+                    col_n.markdown(
+                        f"<span style='color: {NIVEL_COLORS[nv] if es_top else '#94a3b8'};"
+                        f"font-weight: {'500' if es_top else '400'};'>{nv}</span>",
+                        unsafe_allow_html=True
+                    )
+                    col_b.markdown(f"""
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="flex: 1; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden;">
+                            <div style="width: {p*100}%; height: 100%; background: {NIVEL_COLORS[nv]}; border-radius: 3px;"></div>
+                        </div>
+                        <span style="font-size: 0.85rem; color: {NIVEL_COLORS[nv] if es_top else '#94a3b8'};
+                                     min-width: 38px; text-align: right;">
+                            {p*100:.0f}%
+                        </span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            st.divider()
-            st.markdown("##### 🎵 Canciones similares en el dataset de referencia")
-            mask = df["nivel"] == nivel_pred
-            similares = df[mask][["cancion","artista","nivel","n_territorios_top","career_stage","origen"]].sample(min(5, mask.sum()), random_state=42)
-            st.dataframe(similares, hide_index=True, use_container_width=True)
+            # TERRITORIOS RECOMENDADOS
+            st.markdown('<p class="section-label">Territorios con mejor recibimiento esperado</p>',
+                         unsafe_allow_html=True)
+            st.caption(f"Basado en patrones de canciones nivel {nivel_pred} del dataset de referencia.")
 
-        elif not audio_ok:
-            st.info("👈 Sube un archivo de audio y completa el perfil del artista.")
+            recomendados = territorios_recomendados(nivel_pred, territorios_seleccionados)
+            for r in recomendados:
+                badge_color = "#38bdf8" if r["afinidad"] == "Alta" else "#94a3b8"
+                badge_bg    = "rgba(56,189,248,0.12)" if r["afinidad"] == "Alta" else "rgba(148,163,184,0.1)"
+                actual_tag  = (' <span style="color:#22c55e; font-size:0.7rem; '
+                               'background:rgba(34,197,94,0.12); padding:1px 7px; border-radius:99px; '
+                               'margin-left:6px">presencia actual</span>'
+                               if r["actual"] else "")
+                st.markdown(f"""
+                <div class="region-row">
+                    <span style="font-size: 1.3rem;">{r["flag"]}</span>
+                    <div style="flex: 1;">
+                        <div style="color: #e2e8f0; font-size: 0.92rem;">{r["nombre"]}{actual_tag}</div>
+                    </div>
+                    <span style="background: {badge_bg}; color: {badge_color};
+                                 font-size: 0.75rem; padding: 3px 10px; border-radius: 99px;">
+                        Afinidad {r["afinidad"].lower()}
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # TEMPORADA ÓPTIMA
+            st.markdown('<p class="section-label">Momento de lanzamiento sugerido</p>',
+                         unsafe_allow_html=True)
+            temporada = temporada_optima(nivel_pred)
+            
+            cols_meses = st.columns(12)
+            for i, mes_nombre in enumerate(meses):
+                mes_num = i + 1
+                es_top = mes_num in temporada["top_meses"]
+                es_seleccionado = mes_num == release_month
+                bg_cell = ("#f59e0b" if es_seleccionado else
+                            "rgba(245,158,11,0.18)" if es_top else "#1e293b")
+                color_cell = ("#0f172a" if es_seleccionado else
+                               "#f59e0b" if es_top else "#64748b")
+                cols_meses[i].markdown(f"""
+                <div class="month-cell" style="background: {bg_cell}; color: {color_cell};">
+                    {mes_nombre}
+                </div>
+                """, unsafe_allow_html=True)
+
+            estacion_txt = (f"durante {temporada['estacion']}"
+                             if temporada["estacion"]
+                             else f"en los meses {', '.join(temporada['top_nombres'][:3])}")
+            mes_actual = meses[release_month - 1]
+            alineado = release_month in temporada["top_meses"]
+            
+            mensaje = (f"Las canciones nivel {nivel_pred} del dataset suelen concentrar su mejor "
+                       f"recibimiento {estacion_txt}, donde se ubica el {temporada['pct']}% de los "
+                       f"casos con mejor performance. ")
+            if alineado:
+                mensaje += f"Tu lanzamiento en {mes_actual} está alineado con esa ventana."
+            else:
+                mensaje += (f"Tu lanzamiento planeado en {mes_actual} queda fuera de la temporada "
+                            f"de mayor tracción para esta clase.")
+
+            st.markdown(f"""
+            <div style="background: rgba(245,158,11,0.06); border-left: 3px solid #f59e0b;
+                        padding: 12px 14px; border-radius: 4px; margin-top: 12px;
+                        font-size: 0.85rem; color: #cbd5e1; line-height: 1.6;">
+                {mensaje}
+            </div>
+            """, unsafe_allow_html=True)
+
+            # CANCIONES SIMILARES
+            with st.expander("Canciones de referencia con nivel similar", expanded=False):
+                mask = df["nivel"] == nivel_pred
+                sim = df[mask][["cancion", "artista", "n_territorios_top", "career_stage"]].sample(
+                    min(5, mask.sum()), random_state=42
+                ).rename(columns={
+                    "cancion": "Canción", "artista": "Artista",
+                    "n_territorios_top": "Territorios", "career_stage": "Trayectoria",
+                })
+                st.dataframe(sim, hide_index=True, use_container_width=True)
+
+        else:
+            # Estado inicial
             st.markdown("""
-            #### ¿Cómo funciona HitBeat?
-            1. **Sube el audio** (.wav o .mp3) — la app extrae automáticamente las 16 características acústicas con Librosa
-            2. **Completa el perfil del artista** — datos contextuales disponibles antes del lanzamiento
-            3. **Obtén la predicción** — Bajo / Medio / Alto con probabilidades
+            <div class="result-card">
+                <p class="section-label" style="margin-top:0">Cómo funciona</p>
+                <ol style="color: #cbd5e1; line-height: 1.9; font-size: 0.9rem; padding-left: 1.2rem;">
+                    <li>Sube el archivo de audio (.wav o .mp3) — las características acústicas
+                        se extraen automáticamente con Librosa.</li>
+                    <li>Completa el perfil del artista. Los campos están encadenados por 
+                        trayectoria para evitar combinaciones inconsistentes.</li>
+                    <li>Obtén el análisis: nivel proyectado, territorios con mejor recibimiento, 
+                        y temporada óptima de lanzamiento.</li>
+                </ol>
+                <p style="color: #64748b; font-size: 0.8rem; font-style: italic; 
+                          margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 12px;">
+                    Modelo CatBoost entrenado con 333 canciones de Balada. 
+                    Accuracy validada por 5-Fold CV: 67.86% (baseline azar = 33%).
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
 
-            Modelo entrenado con **333 canciones de Balada** · **Accuracy CV: 67.86%** (azar = 33%)
-            """)
 
-# ══════════ TAB 2: EXPLORAR MERCADO ══════════
+# ══════════════════════════════════════════════════════════════
+# TAB 2 — EXPLORAR MERCADO
+# ══════════════════════════════════════════════════════════════
 with tabs[1]:
-    st.markdown("### Exploración del dataset de Balada")
+    st.markdown("##### Exploración del dataset de Balada")
+    st.caption("333 canciones · Balance 111 / 111 / 111 por nivel · Datos reales y sintéticos calibrados")
+
     with st.sidebar:
-        st.markdown("### 🔍 Filtros")
+        st.markdown("### Filtros")
         nivel_filtro  = st.multiselect("Nivel", ["Alto","Medio","Bajo"], default=["Alto","Medio","Bajo"])
         origen_filtro = st.multiselect("Origen", ["real","sintetico"], default=["real","sintetico"])
-        career_filtro = st.multiselect("Etapa de carrera", df["career_stage"].unique().tolist(), default=df["career_stage"].unique().tolist())
+        career_filtro = st.multiselect("Trayectoria",
+                                        df["career_stage"].unique().tolist(),
+                                        default=df["career_stage"].unique().tolist())
 
-    df_f = df[df["nivel"].isin(nivel_filtro) & df["origen"].isin(origen_filtro) & df["career_stage"].isin(career_filtro)]
+    df_f = df[df["nivel"].isin(nivel_filtro) &
+              df["origen"].isin(origen_filtro) &
+              df["career_stage"].isin(career_filtro)]
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Canciones", len(df_f))
@@ -285,56 +760,53 @@ with tabs[1]:
 
     c1, c2 = st.columns(2)
     with c1:
-        fig = px.pie(df_f["nivel"].value_counts().reset_index(), values="count", names="nivel",
-                     title="Distribución de niveles", color="nivel", color_discrete_map=NIVEL_COLORS, hole=0.4)
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white")
+        fig = px.pie(df_f["nivel"].value_counts().reset_index(),
+                     values="count", names="nivel",
+                     title="Distribución de niveles", color="nivel",
+                     color_discrete_map=NIVEL_COLORS, hole=0.55)
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                           font_family="Arial", title_font_size=14)
         st.plotly_chart(fig, use_container_width=True)
     with c2:
-        fig = px.box(df_f, x="nivel", y="n_territorios_top", color="nivel",
-                     color_discrete_map=NIVEL_COLORS, title="Territorios de impacto por nivel",
+        fig = px.box(df_f, x="nivel", y="n_territorios_top",
+                     color="nivel", color_discrete_map=NIVEL_COLORS,
+                     title="Territorios de impacto por nivel",
                      category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white", showlegend=False)
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                           showlegend=False, title_font_size=14)
         st.plotly_chart(fig, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        fig = px.violin(df_f, x="nivel", y="tempo_bpm", color="nivel",
-                        color_discrete_map=NIVEL_COLORS, title="Tempo (BPM) por nivel",
-                        box=True, category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white", showlegend=False)
+        fig = px.violin(df_f, x="nivel", y="tempo_bpm",
+                         color="nivel", color_discrete_map=NIVEL_COLORS,
+                         title="Tempo (BPM) por nivel", box=True,
+                         category_orders={"nivel":["Bajo","Medio","Alto"]})
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                           showlegend=False, title_font_size=14)
         st.plotly_chart(fig, use_container_width=True)
     with c4:
-        fig = px.box(df_f, x="nivel", y="yt_channel_subscribers_log", color="nivel",
-                     color_discrete_map=NIVEL_COLORS, title="Suscriptores canal (log10) por nivel",
+        fig = px.box(df_f, x="nivel", y="yt_channel_subscribers_log",
+                     color="nivel", color_discrete_map=NIVEL_COLORS,
+                     title="Suscriptores del canal (log10) por nivel",
                      category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white", showlegend=False)
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                           showlegend=False, title_font_size=14)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### 🌍 Territorios de mayor impacto por nivel")
-    cols_p = st.columns(3)
-    for i, nivel in enumerate(["Alto","Medio","Bajo"]):
-        sub = df_f[df_f["nivel"]==nivel]
-        pc  = sub["territorio_top_1"].value_counts().head(6).reset_index()
-        fig = px.bar(pc, x="territorio_top_1", y="count", title=f"{NIVEL_EMOJIS[nivel]} Nivel {nivel}",
-                     color_discrete_sequence=[NIVEL_COLORS[nivel]])
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white",
-                          showlegend=False, xaxis_title="", yaxis_title="canciones")
-        cols_p[i].plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### 📊 Suscriptores vs Territorios de impacto")
-    fig = px.scatter(df_f, x="yt_channel_subscribers_log", y="n_territorios_top",
-                     color="nivel", color_discrete_map=NIVEL_COLORS,
-                     hover_data=["artista","cancion","career_stage"],
-                     title="Canal (log10 subs) vs Territorios de impacto", opacity=0.7)
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white")
-    st.plotly_chart(fig, use_container_width=True)
-
-# ══════════ TAB 3: FEATURE IMPORTANCE ══════════
+# ══════════════════════════════════════════════════════════════
+# TAB 3 — FEATURE IMPORTANCE
+# ══════════════════════════════════════════════════════════════
 with tabs[2]:
-    st.markdown("### Importancia de variables — Modelo Balada")
+    st.markdown("##### Importancia de variables en el modelo")
+    st.caption("Calculado con CatBoost Feature Importance sobre las 34 variables de inferencia.")
+
     importances = pd.DataFrame({
-        "feature": FEATURES, "importance": modelo.get_feature_importance(),
+        "feature":    FEATURES,
+        "importance": modelo.get_feature_importance(),
     }).sort_values("importance", ascending=False)
+
     importances["bloque"] = importances["feature"].apply(lambda f:
         "Territorial" if f in ["territorio_top_1","territorio_top_2","n_territorios_top"]
         else "Last.fm"   if f.startswith("lastfm")
@@ -342,74 +814,103 @@ with tabs[2]:
         else "Editorial" if f in ["career_stage","label_type","has_featuring","n_collaborators","release_month"]
         else "Audio"
     )
-    bloque_colors = {"Territorial":"#f97316","Last.fm":"#f5c842","YouTube":"#4ade80","Editorial":"#a855f7","Audio":"#f87171"}
-    fig = px.bar(importances, x="importance", y="feature", color="bloque",
-                 color_discrete_map=bloque_colors, orientation="h",
-                 title="Feature Importance — 34 variables", text="importance")
-    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-    fig.update_layout(height=900, paper_bgcolor="rgba(0,0,0,0)", font_color="white",
-                      yaxis=dict(categoryorder="total ascending"), xaxis_title="Importancia (%)", yaxis_title="")
+    bloque_colors = {"Territorial":"#f97316","Last.fm":"#fbbf24",
+                      "YouTube":"#4ade80","Editorial":"#a855f7","Audio":"#f87171"}
+
+    fig = px.bar(importances, x="importance", y="feature",
+                 color="bloque", color_discrete_map=bloque_colors,
+                 orientation="h", text="importance")
+    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside",
+                       textfont_color="#94a3b8")
+    fig.update_layout(
+        height=850, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#e2e8f0",
+        yaxis=dict(categoryorder="total ascending"),
+        xaxis_title="Importancia (%)", yaxis_title="",
+        legend_title_text="Bloque", title_font_size=14,
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-    bloque_sum = importances.groupby("bloque")["importance"].sum().reset_index().sort_values("importance", ascending=False)
-    fig2 = px.pie(bloque_sum, values="importance", names="bloque", color="bloque",
-                  color_discrete_map=bloque_colors, hole=0.45)
-    fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white")
-    col_pie, col_tab = st.columns([1,1])
-    col_pie.plotly_chart(fig2, use_container_width=True)
-    bloque_sum.columns = ["Bloque","Importancia (%)"]
-    bloque_sum["Importancia (%)"] = bloque_sum["Importancia (%)"].round(2)
-    col_tab.dataframe(bloque_sum, hide_index=True, use_container_width=True)
-    st.info("**Hallazgo clave:** `n_territorios_top` (33.6%) domina el modelo. La amplitud geográfica del artista predice mejor el alcance que cualquier feature de audio individual.")
+    st.markdown("""
+    <div style="background: rgba(56,189,248,0.06); border-left: 3px solid #38bdf8;
+                padding: 14px 18px; border-radius: 4px; font-size: 0.88rem;
+                color: #cbd5e1; line-height: 1.6; margin-top: 1rem;">
+        <strong style="color: #38bdf8;">Hallazgo principal:</strong> 
+        la variable <code>n_territorios_top</code> domina el modelo con 33.6% de importancia. 
+        El número de territorios hispanohablantes con tracción del artista es un mejor predictor 
+        del alcance de una canción nueva que cualquier característica acústica individual.
+    </div>
+    """, unsafe_allow_html=True)
 
-# ══════════ TAB 4: METODOLOGÍA ══════════
+
+# ══════════════════════════════════════════════════════════════
+# TAB 4 — METODOLOGÍA
+# ══════════════════════════════════════════════════════════════
 with tabs[3]:
-    st.markdown("### Metodología del proyecto HitBeat")
+    st.markdown("##### Metodología del proyecto HitBeat")
+    
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("""
-        #### ¿Qué predice HitBeat?
-        | Nivel | Rango de vistas | Representación |
-        |---|---|---|
-        | 🔴 Alto | > 100M | ~5% |
-        | 🟡 Medio | 5M – 100M | ~20% |
-        | 🟢 Bajo | < 5M | ~75% |
+        ##### Definición del problema
+        Clasificación multiclase del nivel de alcance esperado de una canción 
+        en YouTube antes de su publicación.
+        
+        | Nivel | Rango de vistas | Mercado |
+        |-------|-----------------|---------|
+        | Alto  | más de 100M     | ~5% de los videos |
+        | Medio | 5M – 100M       | ~20% |
+        | Bajo  | menos de 5M     | ~75% |
 
-        #### Dataset
-        - 333 canciones de Balada en español
-        - 170 reales + 163 sintéticas calibradas
-        - Balance: 111 por clase · 2010–2024
-
-        #### Extracción de audio
-        16 features acústicas extraídas automáticamente del archivo .wav con **Librosa** (Python). No se requiere acceso posterior a la publicación.
-
-        #### Pipeline en Databricks
-        `Bronze → Silver → Gold`
-        Orquestado como Job con trigger por File Arrival.
+        ##### Dataset
+        - 333 canciones de Balada en español, 2010–2024  
+        - 170 reales con extracción directa de fuentes  
+        - 163 sintéticas calibradas para balance de clases  
+        - 88 artistas distintos, 13 países hispanohablantes
+        
+        ##### Pipeline de datos
+        Arquitectura Medallion en Databricks (Bronze → Silver → Gold), 
+        orquestada como Job con disparador por llegada de archivo. 
+        Cada nueva canción ingresada al volumen reentrenará el modelo 
+        automáticamente.
         """)
     with c2:
         st.markdown("""
-        #### Modelo: CatBoost Multiclase
-        - Validación: 5-Fold Stratified Cross Validation
-        - **Accuracy CV: 67.86% ± 2.86%** (azar = 33%)
-        - Registro: MLflow Unity Catalog
-
-        #### Variables de inferencia (34 features)
+        ##### Modelo
+        CatBoost Multiclase con tratamiento nativo de variables categóricas. 
+        Validación por 5-Fold Stratified Cross Validation.
+        
+        | Métrica | Valor |
+        |---------|-------|
+        | Accuracy CV | 67.86% ± 2.86% |
+        | F1 macro CV | 67.11% |
+        | Baseline azar | 33.3% |
+        
+        ##### Variables de inferencia
+        34 features distribuidas en cinco bloques, todas disponibles 
+        antes del lanzamiento:
+        
         | Bloque | N | Importancia |
-        |---|---|---|
-        | 🟠 Territorial | 3 | ~42% |
-        | 🟡 Last.fm | 6 | ~14% |
-        | 🟢 YouTube | 4 | ~10% |
-        | 🟣 Editorial | 5 | ~8% |
-        | 🔴 Audio | 16 | ~26% |
-
-        #### Limitaciones
-        - Dataset de Balada únicamente (Reguetón y Corridos en proceso)
-        - Overfitting moderado con 333 muestras
-        - Clase Medio estructuralmente ambigua
-
-        #### Referencias
-        - Herremans et al. (2014) · Interiano et al. (2018) · Pachet & Roy (2008)
+        |--------|---|-------------|
+        | Territorial | 3 | ~42% |
+        | Audio | 16 | ~26% |
+        | Last.fm | 6 | ~14% |
+        | YouTube | 4 | ~10% |
+        | Editorial | 5 | ~8% |
+        
+        ##### Limitaciones
+        - Modelo entrenado únicamente con Balada. Reguetón y Corridos 
+          en proceso para arquitectura de tres modelos especializados.  
+        - Overfitting moderado con 333 muestras (esperado se reduzca 
+          con dataset extendido).  
+        - La clase Medio es estructuralmente más ambigua por la 
+          amplitud del rango (5M – 100M).
         """)
+    
     st.divider()
-    st.markdown("<div style='text-align:center;color:#64748b;font-size:0.85rem'>HitBeat · TT · IPN ESCOM · Mayo 2026 · Databricks + Streamlit Cloud</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align: center; color: #64748b; font-size: 0.8rem; padding: 1rem 0;">
+        HitBeat · Trabajo Terminal · IPN ESCOM · Mayo 2026<br>
+        Databricks (Delta Lake · MLflow Unity Catalog) → Streamlit Cloud
+    </div>
+    """, unsafe_allow_html=True)
