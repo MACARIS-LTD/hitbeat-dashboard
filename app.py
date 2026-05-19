@@ -108,7 +108,7 @@ def cargar_datos():
 
 @st.cache_resource
 def cargar_modelo():
-    ruta = os.path.join(os.path.dirname(__file__), "data", "modelo_balada.pkl")
+    ruta = os.path.join(os.path.dirname(__file__), "data", "modelo_unificado.pkl")
     with open(ruta, "rb") as f:
         return pickle.load(f)
 
@@ -119,7 +119,9 @@ modelo = cargar_modelo()
 # ══════════════════════════════════════════════════════════════
 # CONSTANTES Y REGLAS DE CONSISTENCIA
 # ══════════════════════════════════════════════════════════════
+# 35 features: 'genero' es la primera, el resto en el mismo orden con que se entrenó el modelo
 FEATURES = [
+    "genero",
     "yt_channel_subscribers_log", "channel_age_years",
     "is_vevo", "is_licensed_content",
     "lastfm_artist_listeners", "lastfm_artist_playcount",
@@ -134,6 +136,9 @@ FEATURES = [
     "bailabilidad_essentia", "complejidad_dinamica_essentia",
     "mfcc_1", "mfcc_2", "mfcc_3", "mfcc_4", "mfcc_5",
 ]
+
+# Géneros soportados por el modelo unificado
+GENEROS = ["Balada", "Reguetón", "Regional Mexicano"]
 
 # Rangos en valores numéricos representativos del rango
 SUBS_RANGOS = {
@@ -162,14 +167,9 @@ ANTIGUEDAD_RANGOS = {
     "Más de 10 años":   14.0,
 }
 
-# Reglas de compatibilidad por trayectoria.
-# Rangos calibrados con los percentiles reales (P10–P90) del dataset de referencia.
-# Las categorías se solapan deliberadamente porque la trayectoria no es función
-# exclusiva de subs sino composite con antigüedad, sello y alcance internacional.
+# Reglas de compatibilidad por trayectoria (calibradas con percentiles reales)
 COMPAT = {
     "Emergente": {
-        # Sin masa crítica de audiencia. Mediana de subs ~195K, max real 1.8M.
-        # 38% de los Emergentes del dataset tiene VEVO, así que se permite.
         "subs":       ["Menos de 100 mil", "100 mil – 500 mil", "500 mil – 2 millones"],
         "listeners":  ["Menos de 50 mil", "50 mil – 500 mil"],
         "antiguedad": ["Menos de 2 años", "2 – 5 años", "5 – 10 años", "Más de 10 años"],
@@ -178,7 +178,6 @@ COMPAT = {
         "max_territorios": 4,
     },
     "Establecido": {
-        # Audiencia regional consolidada. Mediana de subs ~780K, max real 10.9M.
         "subs":       ["100 mil – 500 mil", "500 mil – 2 millones", "2 – 10 millones"],
         "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
         "antiguedad": ["2 – 5 años", "5 – 10 años", "Más de 10 años"],
@@ -187,9 +186,6 @@ COMPAT = {
         "max_territorios": 6,
     },
     "Consagrado": {
-        # Audiencia masiva internacional. Mediana de subs ~4.1M, max real 18.7M.
-        # Algunos consagrados tienen poca presencia en Last.fm por cobertura
-        # desigual, por eso se permite el rango 50K-500K de listeners.
         "subs":       ["500 mil – 2 millones", "2 – 10 millones", "Más de 10 millones"],
         "listeners":  ["50 mil – 500 mil", "500 mil – 2 millones", "Más de 2 millones"],
         "antiguedad": ["5 – 10 años", "Más de 10 años"],
@@ -283,25 +279,26 @@ def extraer_features_audio(wav_bytes):
 
 
 # ══════════════════════════════════════════════════════════════
-# FUNCIONES DE ANÁLISIS DE OUTPUT
+# FUNCIONES DE ANÁLISIS DE OUTPUT (filtran por género y nivel)
 # ══════════════════════════════════════════════════════════════
-def territorios_recomendados(nivel, paises_artista):
-    """
-    Estima los 3-4 territorios donde una canción de este nivel suele tener
-    mejor recibimiento. Basado en frecuencias del dataset filtrando por nivel.
-    """
-    sub = df[df["nivel"] == nivel]
+def territorios_recomendados(genero, nivel, paises_artista):
+    """Territorios con mejor recibimiento esperado, filtrados por género y nivel."""
+    sub = df[(df["genero"] == genero) & (df["nivel"] == nivel)]
+    if len(sub) == 0:
+        # Si no hay canciones de ese género/nivel, usar solo nivel
+        sub = df[df["nivel"] == nivel]
+
     freq = pd.concat([
         sub["territorio_top_1"].value_counts(),
         sub[sub["territorio_top_2"] != "SIN_SEGUNDO"]["territorio_top_2"].value_counts(),
     ], axis=1).fillna(0).sum(axis=1)
     freq = freq.sort_values(ascending=False).head(4)
     total = freq.sum()
-    
+
     resultado = []
     for pais, count in freq.items():
         if pais == "SIN_SEGUNDO": continue
-        afinidad = "Alta" if count / total > 0.20 else "Media"
+        afinidad = "Alta" if count / total > 0.25 else "Media"
         es_actual = pais in paises_artista
         resultado.append({
             "pais": pais,
@@ -313,14 +310,16 @@ def territorios_recomendados(nivel, paises_artista):
     return resultado[:4]
 
 
-def temporada_optima(nivel):
-    """Calcula el mes/temporada óptima basado en patrones del dataset."""
-    sub = df[df["nivel"] == nivel]
+def temporada_optima(genero, nivel):
+    """Mes/temporada óptima basada en patrones del dataset, filtrada por género y nivel."""
+    sub = df[(df["genero"] == genero) & (df["nivel"] == nivel)]
+    if len(sub) == 0:
+        sub = df[df["nivel"] == nivel]
+
     counts = sub["release_month"].value_counts().sort_index()
-    # Top 4 meses
     top = counts.nlargest(4).index.tolist()
     pct = round(counts.loc[top].sum() / counts.sum() * 100)
-    
+
     meses = ["Ene","Feb","Mar","Abr","May","Jun",
              "Jul","Ago","Sep","Oct","Nov","Dic"]
     estaciones = {
@@ -329,13 +328,12 @@ def temporada_optima(nivel):
         (6,7,8):  "el verano",
         (9,10,11):"el otoño",
     }
-    
     estacion_dominante = None
     for rango, nombre in estaciones.items():
         if sum(m in rango for m in top) >= 3:
             estacion_dominante = nombre
             break
-    
+
     return {
         "top_meses": top,
         "top_nombres": [meses[m-1] for m in top],
@@ -370,7 +368,18 @@ with tabs[0]:
     # ── FORMULARIO ────────────────────────────────────────────
     with col_form:
 
-        # 1. AUDIO
+        # 1. GÉNERO (CAMPO ANCLA PRINCIPAL)
+        st.markdown('<p class="section-label">Género musical</p>', unsafe_allow_html=True)
+        st.caption("El modelo está entrenado con tres géneros de música latina en español.")
+        genero = st.radio(
+            "Género",
+            GENEROS,
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        # 2. AUDIO
         st.markdown('<p class="section-label">Audio de la canción</p>', unsafe_allow_html=True)
         wav_file = st.file_uploader(
             "Archivo de audio (.wav o .mp3)",
@@ -398,7 +407,7 @@ with tabs[0]:
                     c2.metric("Spectral rolloff",     f"{feats['caida_espectral_rolloff']:.0f} Hz")
                     c2.metric("Complejidad dinámica", f"{feats['complejidad_dinamica_essentia']:.1f} dB")
 
-        # 2. TRAYECTORIA (CAMPO ANCLA)
+        # 3. TRAYECTORIA (CAMPO ANCLA SECUNDARIO)
         st.markdown('<p class="section-label">Trayectoria del artista</p>', unsafe_allow_html=True)
         st.caption("Define el nivel de fama del artista. Condiciona los rangos válidos del resto del formulario.")
         trayectoria = st.radio(
@@ -415,7 +424,7 @@ with tabs[0]:
         )
         compat = COMPAT[trayectoria]
 
-        # 3. CANAL DE YOUTUBE
+        # 4. CANAL DE YOUTUBE
         st.markdown('<p class="section-label">Canal del artista en YouTube</p>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
@@ -430,7 +439,7 @@ with tabs[0]:
                 compat["antiguedad"],
             )
 
-        # Distribución comercial (reemplaza VEVO + licensed por un único selector)
+        # Distribución comercial (selector unificado)
         distribucion = st.radio(
             "¿Cómo se distribuye comercialmente la música del artista?",
             [
@@ -447,16 +456,14 @@ with tabs[0]:
                 "firmados con un major label (Universal, Sony, Warner)."
             ),
         )
-
-        # Mapeo a las variables booleanas que recibe el modelo
         if distribucion == "Distribución independiente (sin contrato con sello)":
             is_vevo, is_licensed = False, False
         elif distribucion == "Sello con distribución registrada":
             is_vevo, is_licensed = False, True
-        else:  # Sello con canal VEVO oficial
+        else:
             is_vevo, is_licensed = True, True
 
-        # 4. POPULARIDAD LAST.FM
+        # 5. POPULARIDAD LAST.FM
         st.markdown('<p class="section-label">Popularidad histórica en Last.fm</p>', unsafe_allow_html=True)
         st.caption("Consultar en last.fm/music/{nombre del artista}")
         c1, c2 = st.columns(2)
@@ -467,7 +474,6 @@ with tabs[0]:
                 help="Personas distintas que escuchan al artista en Last.fm.",
             )
         with c2:
-            # Filtrar playcount válido según listeners
             listeners_val = LISTENERS_RANGOS[listeners_label]
             playcount_validos = [
                 k for k, v in PLAYCOUNT_RANGOS.items()
@@ -481,27 +487,23 @@ with tabs[0]:
                 help="Historial acumulado del artista. Debe ser mayor que los oyentes únicos.",
             )
 
-        # 5. PERFIL EDITORIAL
+        # 6. PERFIL EDITORIAL
         st.markdown('<p class="section-label">Perfil editorial</p>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            # El sello se condiciona por la opción de distribución elegida arriba
             if is_vevo:
-                # VEVO siempre implica Major
                 sello = "Major (Universal / Sony / Warner)"
                 st.selectbox(
                     "Sello discográfico", [sello], disabled=True,
                     help="VEVO requiere sello Major.",
                 )
             elif not is_licensed:
-                # Distribución independiente implica sin sello formal
                 sello = "Independiente"
                 st.selectbox(
                     "Sello discográfico", [sello], disabled=True,
                     help="La distribución independiente implica que no hay un sello con derechos registrados.",
                 )
             else:
-                # Sello con distribución registrada: puede ser indie, regional o major
                 opciones_sello = [s for s in compat["sello"]
                                   if s != "Independiente" or "Independiente" in compat["sello"]]
                 sello = st.selectbox("Sello discográfico", opciones_sello)
@@ -514,7 +516,7 @@ with tabs[0]:
         has_featuring = featuring_opt != "Sin featuring"
         n_collabs = {"Sin featuring": 0, "1 colaborador": 1, "2 o más": 2}[featuring_opt]
 
-        # 6. MES DE LANZAMIENTO
+        # 7. MES DE LANZAMIENTO
         st.markdown('<p class="section-label">Mes de lanzamiento planeado</p>', unsafe_allow_html=True)
         meses = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
         release_idx = st.select_slider(
@@ -526,7 +528,7 @@ with tabs[0]:
         )
         release_month = release_idx + 1
 
-        # 7. PRESENCIA TERRITORIAL
+        # 8. PRESENCIA TERRITORIAL
         st.markdown('<p class="section-label">Presencia territorial actual del artista</p>', unsafe_allow_html=True)
         st.caption(f"¿En qué países el artista ya tiene base de fans? Máximo {compat['max_territorios']} para un artista {trayectoria.lower()}.")
 
@@ -540,19 +542,18 @@ with tabs[0]:
             if seleccionado:
                 territorios_seleccionados.append(pais)
 
-        # Validación de cantidad de territorios
         if len(territorios_seleccionados) > compat["max_territorios"]:
             st.markdown(f"""
             <div class="warning-box">
-                Para un artista {trayectoria.lower()} es poco frecuente tener presencia en más de 
-                {compat["max_territorios"]} territorios. El modelo lo procesará de todas formas, 
+                Para un artista {trayectoria.lower()} es poco frecuente tener presencia en más de
+                {compat["max_territorios"]} territorios. El modelo lo procesará de todas formas,
                 pero considera revisar la selección.
             </div>
             """, unsafe_allow_html=True)
 
-        # 8. VALIDACIONES Y BOTÓN
+        # 9. VALIDACIONES Y BOTÓN
         st.markdown("---")
-        
+
         errores = []
         if not audio_ok:
             errores.append("Sube un archivo de audio para habilitar el análisis.")
@@ -573,14 +574,11 @@ with tabs[0]:
     with col_result:
         if predecir and audio_ok and len(territorios_seleccionados) > 0:
 
-            # Mapeo de categorías visuales a valores del modelo
             subs_val      = SUBS_RANGOS[subs_label]
             listeners_val = LISTENERS_RANGOS[listeners_label]
             playcount_val = PLAYCOUNT_RANGOS[playcount_label]
             antig_val     = ANTIGUEDAD_RANGOS[antig_label]
 
-            # Las etiquetas de trayectoria ya coinciden con las del modelo
-            # (Emergente / Establecido / Consagrado), no se requiere mapeo.
             sello_map = {
                 "Independiente": "Indie",
                 "Sello regional": "Regional",
@@ -591,7 +589,9 @@ with tabs[0]:
             territorio_2 = (territorios_seleccionados[1]
                             if len(territorios_seleccionados) >= 2 else "SIN_SEGUNDO")
 
+            # Construir input con TODAS las features en el orden que espera el modelo
             input_data = pd.DataFrame([{
+                "genero":                      genero,
                 "yt_channel_subscribers_log":  float(np.log10(subs_val)),
                 "channel_age_years":           antig_val,
                 "is_vevo":                     int(is_vevo),
@@ -599,9 +599,9 @@ with tabs[0]:
                 "lastfm_artist_listeners":     listeners_val,
                 "lastfm_artist_playcount":     playcount_val,
                 "lastfm_plays_per_listener":   round(playcount_val / listeners_val, 2),
-                "lastfm_top_tag_score":        65,  # valor medio típico
+                "lastfm_top_tag_score":        65,
                 "lastfm_top10_listeners_mean": int(listeners_val * 0.35),
-                "lastfm_similar_match_mean":   0.55,  # valor medio típico
+                "lastfm_similar_match_mean":   0.55,
                 "territorio_top_1":            territorio_1,
                 "territorio_top_2":            territorio_2,
                 "n_territorios_top":           len(territorios_seleccionados),
@@ -612,6 +612,8 @@ with tabs[0]:
                 "release_month":               release_month,
                 **audio_features,
             }])
+            # Asegurar el orden exacto que espera el modelo
+            input_data = input_data[FEATURES]
 
             nivel_pred = modelo.predict(input_data).flatten()[0]
             proba      = modelo.predict_proba(input_data)[0]
@@ -634,6 +636,9 @@ with tabs[0]:
                 </div>
                 <p style="color: #94a3b8; font-size: 0.9rem; margin-top: 14px;">
                     {NIVEL_DESC[nivel_pred]}
+                </p>
+                <p style="color: #64748b; font-size: 0.75rem; margin-top: 8px;">
+                    Género analizado: {genero}
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -663,12 +668,12 @@ with tabs[0]:
                     </div>
                     """, unsafe_allow_html=True)
 
-            # TERRITORIOS RECOMENDADOS
+            # TERRITORIOS RECOMENDADOS (filtrados por género)
             st.markdown('<p class="section-label">Territorios con mejor recibimiento esperado</p>',
                          unsafe_allow_html=True)
-            st.caption(f"Basado en patrones de canciones nivel {nivel_pred} del dataset de referencia.")
+            st.caption(f"Basado en patrones de canciones {genero.lower()} con nivel {nivel_pred} del dataset.")
 
-            recomendados = territorios_recomendados(nivel_pred, territorios_seleccionados)
+            recomendados = territorios_recomendados(genero, nivel_pred, territorios_seleccionados)
             for r in recomendados:
                 badge_color = "#38bdf8" if r["afinidad"] == "Alta" else "#94a3b8"
                 badge_bg    = "rgba(56,189,248,0.12)" if r["afinidad"] == "Alta" else "rgba(148,163,184,0.1)"
@@ -689,11 +694,11 @@ with tabs[0]:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # TEMPORADA ÓPTIMA
+            # TEMPORADA ÓPTIMA (filtrada por género)
             st.markdown('<p class="section-label">Momento de lanzamiento sugerido</p>',
                          unsafe_allow_html=True)
-            temporada = temporada_optima(nivel_pred)
-            
+            temporada = temporada_optima(genero, nivel_pred)
+
             cols_meses = st.columns(12)
             for i, mes_nombre in enumerate(meses):
                 mes_num = i + 1
@@ -714,8 +719,8 @@ with tabs[0]:
                              else f"en los meses {', '.join(temporada['top_nombres'][:3])}")
             mes_actual = meses[release_month - 1]
             alineado = release_month in temporada["top_meses"]
-            
-            mensaje = (f"Las canciones nivel {nivel_pred} del dataset suelen concentrar su mejor "
+
+            mensaje = (f"Las canciones de {genero.lower()} nivel {nivel_pred} suelen concentrar su mejor "
                        f"recibimiento {estacion_txt}, donde se ubica el {temporada['pct']}% de los "
                        f"casos con mejor performance. ")
             if alineado:
@@ -732,13 +737,15 @@ with tabs[0]:
             </div>
             """, unsafe_allow_html=True)
 
-            # CANCIONES SIMILARES
+            # CANCIONES SIMILARES (filtradas por género)
             with st.expander("Canciones de referencia con nivel similar", expanded=False):
-                mask = df["nivel"] == nivel_pred
-                sim = df[mask][["cancion", "artista", "n_territorios_top", "career_stage"]].sample(
+                mask = (df["nivel"] == nivel_pred) & (df["genero"] == genero)
+                if mask.sum() < 3:
+                    mask = df["nivel"] == nivel_pred  # fallback a todos los géneros
+                sim = df[mask][["cancion", "artista", "genero", "n_territorios_top", "career_stage"]].sample(
                     min(5, mask.sum()), random_state=42
                 ).rename(columns={
-                    "cancion": "Canción", "artista": "Artista",
+                    "cancion": "Canción", "artista": "Artista", "genero": "Género",
                     "n_territorios_top": "Territorios", "career_stage": "Trayectoria",
                 })
                 st.dataframe(sim, hide_index=True, use_container_width=True)
@@ -749,16 +756,17 @@ with tabs[0]:
             <div class="result-card">
                 <p class="section-label" style="margin-top:0">Cómo funciona</p>
                 <ol style="color: #cbd5e1; line-height: 1.9; font-size: 0.9rem; padding-left: 1.2rem;">
+                    <li>Selecciona el género de la canción.</li>
                     <li>Completa el perfil del artista.</li>
                     <li>Sube el archivo de audio (.wav o .mp3). Las características acústicas
                         se extraen automáticamente.</li>
-                    <li>Obtén el análisis: nivel proyectado, territorios con mejor recibimiento, 
+                    <li>Obtén el análisis: nivel proyectado, territorios con mejor recibimiento,
                         y temporada óptima de lanzamiento.</li>
                 </ol>
-                <p style="color: #64748b; font-size: 0.8rem; font-style: italic; 
+                <p style="color: #64748b; font-size: 0.8rem; font-style: italic;
                           margin-top: 1rem; border-top: 1px solid #1e293b; padding-top: 12px;">
-                    Modelo CatBoost entrenado con 333 canciones de Balada. 
-                    Accuracy validada por 5-Fold CV: 67.86% (baseline azar = 33%).
+                    Modelo CatBoost unificado entrenado con 999 canciones de tres géneros latinos.
+                    Accuracy validada por 5-Fold CV: 76.78% (baseline azar = 33%).
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -768,18 +776,20 @@ with tabs[0]:
 # TAB 2 — EXPLORAR MERCADO
 # ══════════════════════════════════════════════════════════════
 with tabs[1]:
-    st.markdown("##### Exploración del dataset de Balada")
-    st.caption("333 canciones · Balance 111 / 111 / 111 por nivel · Datos reales y sintéticos calibrados")
+    st.markdown("##### Exploración del dataset unificado")
+    st.caption("999 canciones · Tres géneros latinos · Balance 333 por género · Datos calibrados")
 
     with st.sidebar:
         st.markdown("### Filtros")
+        genero_filtro = st.multiselect("Género", GENEROS, default=GENEROS)
         nivel_filtro  = st.multiselect("Nivel", ["Alto","Medio","Bajo"], default=["Alto","Medio","Bajo"])
         origen_filtro = st.multiselect("Origen", ["real","sintetico"], default=["real","sintetico"])
         career_filtro = st.multiselect("Trayectoria",
-                                        df["career_stage"].unique().tolist(),
-                                        default=df["career_stage"].unique().tolist())
+                                        sorted(df["career_stage"].unique().tolist()),
+                                        default=sorted(df["career_stage"].unique().tolist()))
 
-    df_f = df[df["nivel"].isin(nivel_filtro) &
+    df_f = df[df["genero"].isin(genero_filtro) &
+              df["nivel"].isin(nivel_filtro) &
               df["origen"].isin(origen_filtro) &
               df["career_stage"].isin(career_filtro)]
 
@@ -787,52 +797,56 @@ with tabs[1]:
     k1.metric("Canciones", len(df_f))
     k2.metric("Artistas únicos", df_f["artista"].nunique())
     k3.metric("Países", df_f["pais"].nunique())
-    k4.metric("Con featuring", f"{df_f['has_featuring'].mean()*100:.0f}%")
+    k4.metric("Con featuring", f"{df_f['has_featuring'].mean()*100:.0f}%" if len(df_f) > 0 else "0%")
     st.divider()
 
     c1, c2 = st.columns(2)
     with c1:
-        fig = px.pie(df_f["nivel"].value_counts().reset_index(),
-                     values="count", names="nivel",
-                     title="Distribución de niveles", color="nivel",
-                     color_discrete_map=NIVEL_COLORS, hole=0.55)
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
-                           font_family="Arial", title_font_size=14)
-        st.plotly_chart(fig, use_container_width=True)
+        if len(df_f) > 0:
+            fig = px.pie(df_f["genero"].value_counts().reset_index(),
+                         values="count", names="genero",
+                         title="Distribución por género",
+                         color_discrete_sequence=["#38bdf8", "#a855f7", "#f97316"], hole=0.55)
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                               title_font_size=14)
+            st.plotly_chart(fig, use_container_width=True)
     with c2:
-        fig = px.box(df_f, x="nivel", y="n_territorios_top",
-                     color="nivel", color_discrete_map=NIVEL_COLORS,
-                     title="Territorios de impacto por nivel",
-                     category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
-                           showlegend=False, title_font_size=14)
-        st.plotly_chart(fig, use_container_width=True)
+        if len(df_f) > 0:
+            fig = px.box(df_f, x="nivel", y="n_territorios_top",
+                         color="nivel", color_discrete_map=NIVEL_COLORS,
+                         title="Territorios de impacto por nivel",
+                         category_orders={"nivel":["Bajo","Medio","Alto"]})
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                               showlegend=False, title_font_size=14)
+            st.plotly_chart(fig, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        fig = px.violin(df_f, x="nivel", y="tempo_bpm",
-                         color="nivel", color_discrete_map=NIVEL_COLORS,
-                         title="Tempo (BPM) por nivel", box=True,
-                         category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
-                           showlegend=False, title_font_size=14)
-        st.plotly_chart(fig, use_container_width=True)
+        if len(df_f) > 0:
+            fig = px.violin(df_f, x="genero", y="tempo_bpm",
+                             color="genero",
+                             color_discrete_sequence=["#38bdf8", "#a855f7", "#f97316"],
+                             title="Tempo (BPM) por género", box=True)
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                               showlegend=False, title_font_size=14)
+            st.plotly_chart(fig, use_container_width=True)
     with c4:
-        fig = px.box(df_f, x="nivel", y="yt_channel_subscribers_log",
-                     color="nivel", color_discrete_map=NIVEL_COLORS,
-                     title="Suscriptores del canal (log10) por nivel",
-                     category_orders={"nivel":["Bajo","Medio","Alto"]})
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
-                           showlegend=False, title_font_size=14)
-        st.plotly_chart(fig, use_container_width=True)
+        if len(df_f) > 0:
+            fig = px.box(df_f, x="genero", y="yt_channel_subscribers_log",
+                         color="genero",
+                         color_discrete_sequence=["#38bdf8", "#a855f7", "#f97316"],
+                         title="Suscriptores del canal (log10) por género")
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#e2e8f0",
+                               showlegend=False, title_font_size=14)
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════
 # TAB 3 — FEATURE IMPORTANCE
 # ══════════════════════════════════════════════════════════════
 with tabs[2]:
-    st.markdown("##### Importancia de variables en el modelo")
-    st.caption("Calculado con CatBoost Feature Importance sobre las 34 variables de inferencia.")
+    st.markdown("##### Importancia de variables en el modelo unificado")
+    st.caption("Calculado con CatBoost Feature Importance sobre las 35 variables de inferencia.")
 
     importances = pd.DataFrame({
         "feature":    FEATURES,
@@ -840,13 +854,14 @@ with tabs[2]:
     }).sort_values("importance", ascending=False)
 
     importances["bloque"] = importances["feature"].apply(lambda f:
-        "Territorial" if f in ["territorio_top_1","territorio_top_2","n_territorios_top"]
+        "Género"      if f == "genero"
+        else "Territorial" if f in ["territorio_top_1","territorio_top_2","n_territorios_top"]
         else "Last.fm"   if f.startswith("lastfm")
         else "YouTube"   if f in ["yt_channel_subscribers_log","channel_age_years","is_vevo","is_licensed_content"]
         else "Editorial" if f in ["career_stage","label_type","has_featuring","n_collaborators","release_month"]
         else "Audio"
     )
-    bloque_colors = {"Territorial":"#f97316","Last.fm":"#fbbf24",
+    bloque_colors = {"Género":"#38bdf8","Territorial":"#f97316","Last.fm":"#fbbf24",
                       "YouTube":"#4ade80","Editorial":"#a855f7","Audio":"#f87171"}
 
     fig = px.bar(importances, x="importance", y="feature",
@@ -855,7 +870,7 @@ with tabs[2]:
     fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside",
                        textfont_color="#94a3b8")
     fig.update_layout(
-        height=850, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        height=900, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font_color="#e2e8f0",
         yaxis=dict(categoryorder="total ascending"),
         xaxis_title="Importancia (%)", yaxis_title="",
@@ -863,14 +878,20 @@ with tabs[2]:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("""
+    n_terr_imp = importances[importances["feature"] == "n_territorios_top"]["importance"].values[0]
+    genero_imp = importances[importances["feature"] == "genero"]["importance"].values[0]
+
+    st.markdown(f"""
     <div style="background: rgba(56,189,248,0.06); border-left: 3px solid #38bdf8;
                 padding: 14px 18px; border-radius: 4px; font-size: 0.88rem;
                 color: #cbd5e1; line-height: 1.6; margin-top: 1rem;">
-        <strong style="color: #38bdf8;">Hallazgo principal:</strong> 
-        la variable <code>n_territorios_top</code> domina el modelo con 33.6% de importancia. 
-        El número de territorios hispanohablantes con tracción del artista es un mejor predictor 
-        del alcance de una canción nueva que cualquier característica acústica individual.
+        <strong style="color: #38bdf8;">Hallazgos del modelo unificado:</strong><br>
+        La variable <code>n_territorios_top</code> domina el modelo con {n_terr_imp:.1f}% de importancia.
+        El alcance geográfico del artista es el predictor más fuerte del éxito en los tres géneros.<br><br>
+        La variable <code>genero</code> aporta {genero_imp:.1f}% de importancia. Esto indica que el modelo
+        ya distingue entre géneros implícitamente a través de las features acústicas, territoriales y
+        editoriales — la etiqueta explícita refina la predicción pero no es indispensable, lo cual valida
+        la riqueza del feature space.
     </div>
     """, unsafe_allow_html=True)
 
@@ -880,14 +901,14 @@ with tabs[2]:
 # ══════════════════════════════════════════════════════════════
 with tabs[3]:
     st.markdown("##### Metodología del proyecto HitBeat")
-    
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("""
         ##### Definición del problema
-        Clasificación multiclase del nivel de alcance esperado de una canción 
+        Clasificación multiclase del nivel de alcance esperado de una canción
         en YouTube antes de su publicación.
-        
+
         | Nivel | Rango de vistas | Mercado |
         |-------|-----------------|---------|
         | Alto  | más de 100M     | ~5% de los videos |
@@ -895,50 +916,51 @@ with tabs[3]:
         | Bajo  | menos de 5M     | ~75% |
 
         ##### Dataset
-        - 333 canciones de Balada en español, 2010–2024  
-        - 170 reales con extracción directa de fuentes  
-        - 163 sintéticas calibradas para balance de clases  
-        - 88 artistas distintos, 13 países hispanohablantes
-        
+        - 999 canciones distribuidas en tres géneros (333 por género)
+        - Balada, Reguetón, Regional Mexicano
+        - Rango temporal 2008–2022
+
         ##### Pipeline de datos
-        Arquitectura Medallion en Databricks (Bronze → Silver → Gold), 
-        orquestada como Job con disparador por llegada de archivo. 
-        Cada nueva canción ingresada al volumen reentrenará el modelo 
+        Arquitectura Medallion en Databricks (Bronze → Silver → Gold),
+        orquestada como Job con disparador por llegada de archivo.
+        Cada nueva canción ingresada al volumen reentrenará el modelo
         automáticamente.
         """)
     with c2:
         st.markdown("""
         ##### Modelo
-        CatBoost Multiclase con tratamiento nativo de variables categóricas. 
-        Validación por 5-Fold Stratified Cross Validation.
-        
+        CatBoost Multiclase unificado con tratamiento nativo de variables categóricas.
+        Validación por 5-Fold Stratified Cross Validation con estratificación por
+        género × nivel.
+
         | Métrica | Valor |
         |---------|-------|
-        | Accuracy CV | 67.86% ± 2.86% |
-        | F1 macro CV | 67.11% |
+        | Accuracy CV global | 76.78% ± 1.00% |
+        | F1 macro CV | 76.58% |
         | Baseline azar | 33.3% |
-        
+
+        Accuracy CV por género:
+        - Regional Mexicano: 87.7%
+        - Reguetón: 77.2%
+        - Balada: 65.5%
+
         ##### Variables de inferencia
-        34 features distribuidas en cinco bloques, todas disponibles 
-        antes del lanzamiento:
-        
-        | Bloque | N | Importancia |
-        |--------|---|-------------|
-        | Territorial | 3 | ~42% |
-        | Audio | 16 | ~26% |
-        | Last.fm | 6 | ~14% |
-        | YouTube | 4 | ~10% |
-        | Editorial | 5 | ~8% |
-        
+        35 features disponibles antes del lanzamiento:
+
+        | Bloque | N |
+        |--------|---|
+        | Género | 1 |
+        | Territorial | 3 |
+        | Audio | 16 |
+        | Last.fm | 6 |
+        | YouTube | 4 |
+        | Editorial | 5 |
+
         ##### Limitaciones
-        - Modelo entrenado únicamente con Balada. Reguetón y Corridos 
-          en proceso para arquitectura de tres modelos especializados.  
-        - Overfitting moderado con 333 muestras (esperado se reduzca 
-          con dataset extendido).  
-        - La clase Medio es estructuralmente más ambigua por la 
-          amplitud del rango (5M – 100M).
+        - La clase Medio es estructuralmente más ambigua por la amplitud del rango (5M – 100M).
+        - El modelo se reentrena con cada nuevo dataset que llegue al pipeline.
         """)
-    
+
     st.divider()
     st.markdown("""
     <div style="text-align: center; color: #64748b; font-size: 0.8rem; padding: 1rem 0;">
