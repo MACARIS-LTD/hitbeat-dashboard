@@ -94,6 +94,23 @@ st.markdown("""
         background: #0f172a; border: 1px solid #1e293b;
         border-radius: 8px;
     }
+    /* Tooltips de criterios de trayectoria */
+    .trayectoria-tooltips {
+        display: flex; gap: 1.2rem; flex-wrap: wrap;
+        margin: 0.3rem 0 0.8rem 0;
+    }
+    .trayectoria-chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        color: #94a3b8; font-size: 0.8rem;
+        cursor: help;
+    }
+    .trayectoria-chip .help-icon {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 16px; height: 16px;
+        border: 1px solid #475569; border-radius: 50%;
+        font-size: 0.7rem; color: #94a3b8;
+        background: transparent;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -139,6 +156,26 @@ FEATURES = [
 
 # Géneros soportados por el modelo unificado
 GENEROS = ["Balada", "Reguetón", "Regional Mexicano"]
+
+# Criterios para cada nivel de trayectoria (usados en tooltips)
+TRAYECTORIA_CRITERIOS = {
+    "Emergente": (
+        "Artista sin masa crítica de audiencia. "
+        "Suscriptores típicos por debajo de 500K, oyentes de Last.fm por debajo de 500K. "
+        "Carrera incipiente o reciente, presencia territorial limitada (1–4 países)."
+    ),
+    "Establecido": (
+        "Artista con audiencia regional consolidada. "
+        "Suscriptores típicos entre 100K y 10M, oyentes de Last.fm entre 50K y varios millones. "
+        "Mínimo 2 años de trayectoria activa, presencia en 2–6 territorios."
+    ),
+    "Consagrado": (
+        "Artista con audiencia masiva internacional. "
+        "Suscriptores típicos por encima de 500K (la mediana ronda los 4M), "
+        "oyentes de Last.fm robustos y trayectoria mayor a 5 años. "
+        "Presencia comprobada en múltiples países hispanohablantes."
+    ),
+}
 
 # Rangos en valores numéricos representativos del rango
 SUBS_RANGOS = {
@@ -410,17 +447,28 @@ with tabs[0]:
         # 3. TRAYECTORIA (CAMPO ANCLA SECUNDARIO)
         st.markdown('<p class="section-label">Trayectoria del artista</p>', unsafe_allow_html=True)
         st.caption("Define el nivel de fama del artista. Condiciona los rangos válidos del resto del formulario.")
+
+        # Tooltips con criterios por categoría (pasa el mouse sobre el icono ?)
+        st.markdown(f"""
+        <div class="trayectoria-tooltips">
+            <span class="trayectoria-chip" title="{TRAYECTORIA_CRITERIOS['Emergente']}">
+                Emergente <span class="help-icon">?</span>
+            </span>
+            <span class="trayectoria-chip" title="{TRAYECTORIA_CRITERIOS['Establecido']}">
+                Establecido <span class="help-icon">?</span>
+            </span>
+            <span class="trayectoria-chip" title="{TRAYECTORIA_CRITERIOS['Consagrado']}">
+                Consagrado <span class="help-icon">?</span>
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
         trayectoria = st.radio(
             "Trayectoria",
             list(COMPAT.keys()),
             index=1,
             horizontal=True,
             label_visibility="collapsed",
-            help=(
-                "Emergente: sin masa crítica de audiencia, suscriptores típicos por debajo de 500K.  •  "
-                "Establecido: audiencia regional consolidada, suscriptores típicos de 300K a 3M.  •  "
-                "Consagrado: audiencia masiva internacional, suscriptores típicos por encima de 1M."
-            ),
         )
         compat = COMPAT[trayectoria]
 
@@ -737,11 +785,21 @@ with tabs[0]:
             </div>
             """, unsafe_allow_html=True)
 
-            # CANCIONES SIMILARES (filtradas por género)
+            # CANCIONES SIMILARES (filtradas por género, EXCLUYE sintéticas en el ranking)
             with st.expander("Canciones de referencia con nivel similar", expanded=False):
-                mask = (df["nivel"] == nivel_pred) & (df["genero"] == genero)
+                # Solo reales del mismo género y nivel
+                mask = (df["nivel"] == nivel_pred) & \
+                       (df["genero"] == genero) & \
+                       (df["origen"] == "real")
+
+                # Fallback 1: reales de cualquier género con el mismo nivel
                 if mask.sum() < 3:
-                    mask = df["nivel"] == nivel_pred  # fallback a todos los géneros
+                    mask = (df["nivel"] == nivel_pred) & (df["origen"] == "real")
+
+                # Fallback 2: si por alguna razón no hay reales, usar cualquier registro real
+                if mask.sum() < 3:
+                    mask = df["origen"] == "real"
+
                 sim = df[mask][["cancion", "artista", "genero", "n_territorios_top", "career_stage"]].sample(
                     min(5, mask.sum()), random_state=42
                 ).rename(columns={
