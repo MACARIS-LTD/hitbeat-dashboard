@@ -122,7 +122,13 @@ st.markdown("""
 @st.cache_data
 def cargar_datos():
     ruta = os.path.join(os.path.dirname(__file__), "data", "hitbeat_dashboard_data.csv")
-    return pd.read_csv(ruta)
+    df_local = pd.read_csv(ruta)
+    # Normalizar columnas booleanas: el CSV las serializa como 0/1, las convertimos a bool
+    # para que operaciones como ~df['has_featuring'] y df[df['has_featuring']] funcionen correctamente
+    for col in ["has_featuring", "is_vevo", "is_licensed_content"]:
+        if col in df_local.columns:
+            df_local[col] = df_local[col].astype(bool)
+    return df_local
 
 @st.cache_resource
 def cargar_modelo():
